@@ -1,0 +1,11 @@
+
+streamlit
+mysql-connector-python
+streamlit-option-menu
+pandas
+numpy
+scikit-learn
+fpdf
+pymupdf
+rapidfuzz
+openpyxl
