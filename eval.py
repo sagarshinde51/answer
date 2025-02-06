@@ -1,107 +1,144 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import PyPDF2
 import re
+from sentence_transformers import SentenceTransformer, util
 import fitz  
+import os
 from rapidfuzz import fuzz
 
-def extract_text_from_pdf(pdf_file):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)  
     text = ""
     for page in doc:
-        text += page.get_text("text") + "\n"
+        text += page.get_text("text") + "\n"  
     return text
 
+
 def extract_roll_number(text):
-    match = re.search(r'Roll Number:\s*(\d+)', text)
-    return match.group(1) if match else "Unknown"
+    match = re.search(r'Roll Number:\s*(\d+)', text)  
+    return match.group(1) if match else "Unknown" 
+
+def calculate_similarity(answer1, answer2):
+    return fuzz.ratio(str(answer1), str(answer2))  
+
+def assign_marks(similarity, total_marks):
+    if similarity >= 90:
+        return total_marks 
+    elif similarity >= 70:
+        return total_marks * 0.75  
+    elif similarity >= 50:
+        return total_marks * 0.50 
+    else:
+        return 0  
 
 def extract_questions_answers(pdf_text):
-    lines = pdf_text.split("\n")
+    lines = pdf_text.split("\n")  
     questions = []
     answers = []
     current_question = None
     current_answer = ""
-    
+
     for line in lines:
         line = line.strip()
-        if line.startswith("Q "):
+        if line.startswith("Q "): 
             if current_question:
                 questions.append(current_question)
-                answers.append(current_answer.strip())
-            current_question = line
+                answers.append(current_answer.strip())  
+            current_question = line  
             current_answer = ""
-        elif current_question:
+        elif current_question: 
             current_answer += " " + line
-    
+
     if current_question:
         questions.append(current_question)
         answers.append(current_answer.strip())
-    
+
     return questions, answers
 
 def extract_question_number(question):
-    match = re.search(r'Q\s?\d+', question)
+    match = re.search(r'Q\s?\d+', question)  
     if match:
-        q_number = match.group(0).replace(" ", "")
-        question_text = re.sub(r'Q\s?\d+', '', question).strip()
+        q_number = match.group(0).replace(" ", "")  
+        question_text = re.sub(r'Q\s?\d+', '', question).strip()  
         return q_number, question_text
-    return None, question
+    return None, question  
 
 def clean_answer_column(answer):
     return answer.replace('Answer: ', '').strip()
 
-def calculate_similarity(answer1, answer2):
-    return fuzz.ratio(str(answer1), str(answer2))
 
-def assign_marks(similarity, total_marks):
-    if similarity >= 90:
-        return total_marks
-    elif similarity >= 70:
-        return total_marks * 0.75
-    elif similarity >= 50:
-        return total_marks * 0.50
-    else:
-        return 0
+def main():
+    st.title("Student Answer Evaluation System")
 
-st.title("Student Answer Grading System")
+    # File upload for correct answers
+    correct_answers_file = st.file_uploader("Upload Correct Answers File", type=["xlsx"])
+    if correct_answers_file is not None:
+        correct_answers = pd.read_excel(correct_answers_file)
+        st.write("Correct Answers:", correct_answers)
 
-pdf_file = st.file_uploader("Upload Student's Answer PDF", type=["pdf"])
-csv_file = st.file_uploader("Upload Correct Answers CSV", type=["csv"])
+    # File upload for student answers
+    student_pdf = st.file_uploader("Upload Student's Answer PDF", type=["pdf"])
+    if student_pdf is not None and correct_answers_file is not None:
+        # Extract text from PDF
+        pdf_text = extract_text_from_pdf(student_pdf)
 
-if pdf_file and csv_file:
-    correct_answers = pd.read_csv(csv_file)
-    st.write("Correct Answers CSV Columns:", correct_answers.columns)
-    
-    if 'Marks' not in correct_answers.columns:
-        st.error("The uploaded CSV does not contain a 'Marks' column. Please check the file.")
-    
-    pdf_text = extract_text_from_pdf(pdf_file)
-    questions, answers = extract_questions_answers(pdf_text)
-    roll_number = extract_roll_number(pdf_text)
-    
-    student_answers = pd.DataFrame({'Question': questions, 'Answers': answers})
-    student_answers[['No', 'Question']] = student_answers['Question'].apply(lambda x: pd.Series(extract_question_number(x)))
-    student_answers['Answers'] = student_answers['Answers'].apply(clean_answer_column)
-    
-    st.write("Student Answers DF:", student_answers.head())
-    st.write("Correct Answers DF:", correct_answers.head())
-    
-    df_merged = pd.merge(student_answers, correct_answers, on='No', suffixes=('_student', '_correct'), how='left')
-    
-    if 'Marks' not in df_merged.columns:
-        df_merged['Marks'] = 0
-    
-    df_merged['Similarity (%)'] = df_merged.apply(lambda row: calculate_similarity(row['Answers_student'], row.get('Answers_correct', '')), axis=1)
-    df_merged['Assigned Marks'] = df_merged.apply(lambda row: assign_marks(row['Similarity (%)'], row.get('Marks', 0)), axis=1)
-    
-    student_answers = student_answers.merge(df_merged[['No', 'Assigned Marks']], on='No', how='left')
-    total_marks_obtained = df_merged['Assigned Marks'].sum()
-    total_possible_marks = correct_answers['Marks'].sum()
-    
-    st.write(f"**Student Roll Number:** {roll_number}")
-    st.write(f"**Total Marks Obtained:** {total_marks_obtained:.2f} out of {total_possible_marks:.2f}")
-    
-    st.dataframe(student_answers)
-    
-    csv_output = student_answers.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Graded CSV", csv_output, "graded_answers.csv", "text/csv")
+        # Extract questions and answers
+        questions, answers = extract_questions_answers(pdf_text)
+
+        roll_number = extract_roll_number(pdf_text)
+
+        student_answers = pd.DataFrame({'Question': questions, 'Answers': answers})
+
+        # Extract question number
+        student_answers[['No', 'Question']] = student_answers['Question'].apply(lambda x: pd.Series(extract_question_number(x)))
+        
+        # Clean answers
+        student_answers['Answers'] = student_answers['Answers'].apply(clean_answer_column)
+
+        # Merge with correct answers
+        df_merged = pd.merge(student_answers, correct_answers, on='No', suffixes=('_student', '_correct'))
+        
+        # Calculate similarity
+        df_merged['Similarity (%)'] = df_merged.apply(lambda row: calculate_similarity(row['Answers_student'], row['Answers_correct']), axis=1)
+        
+        # Assign marks based on similarity
+        df_merged['Assigned Marks'] = df_merged.apply(lambda row: assign_marks(row['Similarity (%)'], row['Marks']), axis=1)
+
+        student_answers = student_answers.merge(df_merged[['No', 'Assigned Marks']], on='No', how='left')
+
+        # Total marks obtained
+        total_marks_obtained = df_merged['Assigned Marks'].sum()
+        total_possible_marks = correct_answers['Marks'].sum()
+
+        # Display total marks
+        st.write(f"Student's Total Marks {roll_number}: {total_marks_obtained:.2f} out of {total_possible_marks:.2f}")
+        st.write(f"Roll Number: {roll_number}")
+
+        # Extract subject name
+        with open(student_pdf, "rb") as pdf_file:
+            reader = PyPDF2.PdfReader(pdf_file)
+            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            subject_name = next((line.split(":")[1].strip() for line in text.split("\n") if "Subject :" in line), "Unknown")
+
+        st.write(f"Subject Name: {subject_name}")
+
+        # Display student answers with assigned marks
+        st.write(student_answers)
+
+        # Download the results as a CSV file
+        student_answers_csv = student_answers.to_csv(index=False)
+        st.download_button(
+            label="Download Results as CSV",
+            data=student_answers_csv,
+            file_name="student_answers_with_marks.csv",
+            mime="text/csv"
+        )
+
+
+if __name__ == "__main__":
+    main()
