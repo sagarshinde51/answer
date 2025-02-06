@@ -5,7 +5,7 @@ import fitz
 from rapidfuzz import fuzz
 
 def extract_text_from_pdf(pdf_file):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")  # Read file from memory
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
     text = ""
     for page in doc:
         text += page.get_text("text") + "\n"
@@ -70,6 +70,11 @@ csv_file = st.file_uploader("Upload Correct Answers CSV", type=["csv"])
 
 if pdf_file and csv_file:
     correct_answers = pd.read_csv(csv_file)
+    st.write("Correct Answers CSV Columns:", correct_answers.columns)
+    
+    if 'Marks' not in correct_answers.columns:
+        st.error("The uploaded CSV does not contain a 'Marks' column. Please check the file.")
+    
     pdf_text = extract_text_from_pdf(pdf_file)
     questions, answers = extract_questions_answers(pdf_text)
     roll_number = extract_roll_number(pdf_text)
@@ -78,9 +83,16 @@ if pdf_file and csv_file:
     student_answers[['No', 'Question']] = student_answers['Question'].apply(lambda x: pd.Series(extract_question_number(x)))
     student_answers['Answers'] = student_answers['Answers'].apply(clean_answer_column)
     
-    df_merged = pd.merge(student_answers, correct_answers, on='No', suffixes=('_student', '_correct'))
-    df_merged['Similarity (%)'] = df_merged.apply(lambda row: calculate_similarity(row['Answers_student'], row['Answers_correct']), axis=1)
-    df_merged['Assigned Marks'] = df_merged.apply(lambda row: assign_marks(row['Similarity (%)'], row['Marks']), axis=1)
+    st.write("Student Answers DF:", student_answers.head())
+    st.write("Correct Answers DF:", correct_answers.head())
+    
+    df_merged = pd.merge(student_answers, correct_answers, on='No', suffixes=('_student', '_correct'), how='left')
+    
+    if 'Marks' not in df_merged.columns:
+        df_merged['Marks'] = 0
+    
+    df_merged['Similarity (%)'] = df_merged.apply(lambda row: calculate_similarity(row['Answers_student'], row.get('Answers_correct', '')), axis=1)
+    df_merged['Assigned Marks'] = df_merged.apply(lambda row: assign_marks(row['Similarity (%)'], row.get('Marks', 0)), axis=1)
     
     student_answers = student_answers.merge(df_merged[['No', 'Assigned Marks']], on='No', how='left')
     total_marks_obtained = df_merged['Assigned Marks'].sum()
