@@ -9,3 +9,4 @@ fpdf
 pymupdf
 rapidfuzz
 openpyxl
+PyPDF2
